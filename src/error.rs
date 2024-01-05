@@ -41,6 +41,12 @@ impl VssError {
 	}
 }
 
+impl PartialEq for VssError {
+	fn eq(&self, other: &Self) -> bool {
+		std::mem::discriminant(self) == std::mem::discriminant(other)
+	}
+}
+
 impl Display for VssError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 		match self {

@@ -1,31 +1,38 @@
 use ::prost::Message;
 use reqwest;
 use reqwest::Client;
+use std::error::Error;
+use std::io::Read;
 
 use crate::error::VssError;
 use crate::types::{
 	DeleteObjectRequest, DeleteObjectResponse, GetObjectRequest, GetObjectResponse, ListKeyVersionsRequest,
 	ListKeyVersionsResponse, PutObjectRequest, PutObjectResponse,
 };
+use crate::util::retry::{retry, RetryPolicy};
 
 /// Thin-client to access a hosted instance of Versioned Storage Service (VSS).
 /// The provided [`VssClient`] API is minimalistic and is congruent to the VSS server-side API.
 #[derive(Clone)]
-pub struct VssClient {
+pub struct VssClient<R>
+where
+	R: RetryPolicy<E = VssError>,
+{
 	base_url: String,
 	client: Client,
+	retry_policy: R,
 }
 
-impl VssClient {
+impl<R: RetryPolicy<E = VssError>> VssClient<R> {
 	/// Constructs a [`VssClient`] using `base_url` as the VSS server endpoint.
-	pub fn new(base_url: &str) -> Self {
+	pub fn new(base_url: &str, retry_policy: R) -> Self {
 		let client = Client::new();
-		Self::from_client(base_url, client)
+		Self::from_client(base_url, client, retry_policy)
 	}
 
 	/// Constructs a [`VssClient`] from a given [`reqwest::Client`], using `base_url` as the VSS server endpoint.
-	pub fn from_client(base_url: &str, client: Client) -> Self {
-		Self { base_url: String::from(base_url), client }
+	pub fn from_client(base_url: &str, client: Client, retry_policy: R) -> Self {
+		Self { base_url: String::from(base_url), client, retry_policy }
 	}
 
 	/// Returns the underlying base URL.
@@ -39,7 +46,8 @@ impl VssClient {
 	pub async fn get_object(&self, request: &GetObjectRequest) -> Result<GetObjectResponse, VssError> {
 		let url = format!("{}/getObject", self.base_url);
 
-		let raw_response = self.client.post(url).body(request.encode_to_vec()).send().await?;
+		let request_body = request.encode_to_vec();
+		let raw_response = self.client.post(url).body(request_body).send().await?;
 		let status = raw_response.status();
 		let payload = raw_response.bytes().await?;
 
@@ -63,18 +71,25 @@ impl VssClient {
 	/// Items in the `request` are written in a single all-or-nothing transaction.
 	/// For API contract/usage, refer to docs for [`PutObjectRequest`] and [`PutObjectResponse`].
 	pub async fn put_object(&self, request: &PutObjectRequest) -> Result<PutObjectResponse, VssError> {
-		let url = format!("{}/putObjects", self.base_url);
+		retry(
+			|| async {
+				let url = format!("{}/putObjects", self.base_url);
 
-		let response_raw = self.client.post(url).body(request.encode_to_vec()).send().await?;
-		let status = response_raw.status();
-		let payload = response_raw.bytes().await?;
+				let request_body = request.encode_to_vec();
+				let response_raw = self.client.post(&url).body(request_body).send().await?;
+				let status = response_raw.status();
+				let payload = response_raw.bytes().await?;
 
-		if status.is_success() {
-			let response = PutObjectResponse::decode(&payload[..])?;
-			Ok(response)
-		} else {
-			Err(VssError::new(status, payload))
-		}
+				if status.is_success() {
+					let response = PutObjectResponse::decode(&payload[..])?;
+					Ok(response)
+				} else {
+					Err(VssError::new(status, payload))
+				}
+			},
+			&self.retry_policy,
+		)
+		.await
 	}
 
 	/// Deletes the given `key` and `value` in `request`.
@@ -83,7 +98,8 @@ impl VssClient {
 	pub async fn delete_object(&self, request: &DeleteObjectRequest) -> Result<DeleteObjectResponse, VssError> {
 		let url = format!("{}/deleteObject", self.base_url);
 
-		let response_raw = self.client.post(url).body(request.encode_to_vec()).send().await?;
+		let request_body = request.encode_to_vec();
+		let response_raw = self.client.post(url).body(request_body).send().await?;
 		let status = response_raw.status();
 		let payload = response_raw.bytes().await?;
 
@@ -103,7 +119,8 @@ impl VssClient {
 	) -> Result<ListKeyVersionsResponse, VssError> {
 		let url = format!("{}/listKeyVersions", self.base_url);
 
-		let response_raw = self.client.post(url).body(request.encode_to_vec()).send().await?;
+		let request_body = request.encode_to_vec();
+		let response_raw = self.client.post(url).body(request_body).send().await?;
 		let status = response_raw.status();
 		let payload = response_raw.bytes().await?;
 

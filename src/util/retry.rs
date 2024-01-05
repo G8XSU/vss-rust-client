@@ -82,6 +82,12 @@ pub trait RetryPolicy: Sized {
 	}
 
 	/// Skips retrying on errors that evaluate to `true` after applying `function`.
+	fn skip_retry_on_error2(self, errors: Vec<Self::E>) -> FilteredRetryPolicy2<Self, Self::E>
+	{
+		FilteredRetryPolicy2 { inner_policy: self, errors }
+	}
+
+	/// Skips retrying on errors that evaluate to `true` after applying `function`.
 	fn skip_retry_on_error<F>(self, function: F) -> FilteredRetryPolicy<Self, F>
 	where
 		F: 'static + Fn(&Self::E) -> bool,
@@ -212,6 +218,27 @@ where
 	type E = T::E;
 	fn next_delay(&self, context: &RetryContext<E>) -> Option<Duration> {
 		if (self.function)(&context.error) {
+			None
+		} else {
+			self.inner_policy.next_delay(context)
+		}
+	}
+}
+
+/// Decorates the given `RetryPolicy` by not retrying on errors that match the given function.
+pub struct FilteredRetryPolicy2<T: RetryPolicy, E:Error> {
+	inner_policy: T,
+	errors:Vec<E>
+}
+
+impl<T, E> RetryPolicy for FilteredRetryPolicy2<T, E>
+	where
+		T: RetryPolicy<E = E>,
+		E: Error+PartialEq,
+{
+	type E = T::E;
+	fn next_delay(&self, context: &RetryContext<E>) -> Option<Duration> {
+		if self.errors.contains(&context.error) {
 			None
 		} else {
 			self.inner_policy.next_delay(context)
