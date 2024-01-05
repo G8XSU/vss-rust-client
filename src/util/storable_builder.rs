@@ -74,6 +74,16 @@ impl<T: EntropySource> StorableBuilder<T> {
 			Err(Error::new(ErrorKind::InvalidData, "Invalid Tag"))
 		}
 	}
+
+	/// Serializes the provided [`Storable`].
+	pub fn encode(&self, storable: Storable) -> Vec<u8> {
+		storable.encode_to_vec()
+	}
+
+	/// Deserializes the `input` bytes into [`Storable`].
+	pub fn decode(&self, input: Vec<u8>) -> io::Result<Storable> {
+		Ok(Storable::decode(input[..])?)
+	}
 }
 
 #[cfg(test)]
@@ -100,8 +110,9 @@ mod tests {
 		let expected_data = b"secret".to_vec();
 		let expected_version = 8;
 		let storable = storable_builder.build(expected_data.clone(), expected_version);
-
-		let (actual_data, actual_version) = storable_builder.deconstruct(storable).unwrap();
+		let encoded_storable = storable_builder.encode(storable);
+		let decoded_storable = storable_builder.decode(encoded_storable).unwrap();
+		let (actual_data, actual_version) = storable_builder.deconstruct(decoded_storable).unwrap();
 		assert_eq!(actual_data, expected_data);
 		assert_eq!(actual_version, expected_version);
 	}
