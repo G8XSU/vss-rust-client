@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use prost::Message;
 use reqwest;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::Client;
 use std::default::Default;
+use std::sync::Arc;
 
 use crate::error::VssError;
 use crate::types::{
@@ -25,6 +27,12 @@ where
 	retry_policy: R,
 }
 
+/// ss
+pub trait AuthMethod: Send + Sync {
+	/// sss
+	fn get(&self, request_body: &Vec<u8>) -> HashMap<String, String>;
+}
+
 impl<R: RetryPolicy<E = VssError>> VssClient<R> {
 	/// Constructs a [`VssClient`] using `base_url` as the VSS server endpoint.
 	pub fn new(base_url: &str, retry_policy: R) -> Self {
@@ -45,11 +53,11 @@ impl<R: RetryPolicy<E = VssError>> VssClient<R> {
 	/// Fetches a value against a given `key` in `request`.
 	/// Makes a service call to the `GetObject` endpoint of the VSS server.
 	/// For API contract/usage, refer to docs for [`GetObjectRequest`] and [`GetObjectResponse`].
-	pub async fn get_object(&self, request: &GetObjectRequest) -> Result<GetObjectResponse, VssError> {
+	pub async fn get_object(&self, request: &GetObjectRequest, auth: Arc<dyn AuthMethod>) -> Result<GetObjectResponse, VssError> {
 		retry(
 			|| async {
 				let url = format!("{}/getObject", self.base_url);
-				self.post_request(request, &url).await.and_then(|response: GetObjectResponse| {
+				self.post_request_2(request, &url, auth.clone()).await.and_then(|response: GetObjectResponse| {
 					if response.value.is_none() {
 						Err(VssError::InternalServerError(
 							"VSS Server API Violation, expected value in GetObjectResponse but found none".to_string(),
@@ -107,6 +115,27 @@ impl<R: RetryPolicy<E = VssError>> VssClient<R> {
 			&self.retry_policy,
 		)
 		.await
+	}
+
+	async fn post_request_2<Rq: Message, Rs: Message + Default>(&self, request: &Rq, url: &str, auth: Arc<dyn AuthMethod>) -> Result<Rs, VssError> {
+		let request_body = request.encode_to_vec();
+		println!("{}", auth.get(&request_body).get("k").unwrap());
+		let response_raw = self
+			.client
+			.post(url)
+			.header(CONTENT_TYPE, APPLICATION_OCTET_STREAM)
+			.body(request_body)
+			.send()
+			.await?;
+		let status = response_raw.status();
+		let payload = response_raw.bytes().await?;
+
+		if status.is_success() {
+			let response = Rs::decode(&payload[..])?;
+			Ok(response)
+		} else {
+			Err(VssError::new(status, payload))
+		}
 	}
 
 	async fn post_request<Rq: Message, Rs: Message + Default>(&self, request: &Rq, url: &str) -> Result<Rs, VssError> {
